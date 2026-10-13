@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Iris"
+description = "A frontend-only class-assignment prototype helping adults understand the cost of switching mobile carriers and prepare a switch brief using prewritten bill examples."
+version = "1.0.0"
+id = "artifacts/iris"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21157
+
+[services.development]
+run = "pnpm --filter @workspace/iris run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/iris", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/iris/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21157"
+BASE_PATH = "/"

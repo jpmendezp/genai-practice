@@ -1,6 +1,6 @@
-# [Project name]
+# Iris
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Iris is a single-page class-assignment prototype helping US adults understand the cost of leaving a mobile carrier and prepare a conversation brief.
 
 ## Run & Operate
 
@@ -30,7 +30,9 @@ _Populate as you build — non-obvious choices a reader couldn't infer from the 
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+One three-step flow: Your bill, Confirm facts, Your switch brief.
+
+Iris must remain frontend-only: no backend, database, login, external APIs, or live AI. Bill extraction and advice are prewritten Wizard-of-Oz examples. Inputs and feedback are not saved. Keep the prototype disclosure visible throughout.
 
 ## User preferences
 

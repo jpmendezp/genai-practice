@@ -44,7 +44,7 @@ The future AI system will understand free text requests, read any carrier bill, 
 
 1. **The call is entirely simulated.** No voice agent exists yet and every update is prewritten. Next step: test a voice agent against a mock carrier line before any real call.
 2. **Iris doesn't really understand messages or bills.** Keyword matching misses anything phrased unexpectedly, and only the three sample bills give accurate numbers. Next step: connect an AI model to interpret messages and extract facts from real bills.
-3. **Real calls need consent and identity rules.** Carriers may require the account holder on the line or a PIN, and calling on someone's behalf raises legal and liability questions. Next step: research each carrier's authorized user rules.
+3. **Built for a demo screen, not a real messaging app.** Quick reply chips, summary cards and editable fields don’t work like this in iMessage or SMS today (WhatsApp supports some buttons). Next step: redesign the flow around plain text with numbered replies, photos, and a link for anything complex.
 
 ## Privacy
 

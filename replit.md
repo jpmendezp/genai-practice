@@ -1,6 +1,6 @@
 # Iris
 
-Iris is a single-page class-assignment prototype helping US adults understand the cost of leaving a mobile carrier and prepare a conversation brief.
+Iris is a single-page class-assignment prototype of an AI agent that calls a mobile carrier for the user, who makes retention-offer decisions and approves the final action.
 
 ## Run & Operate
 
@@ -30,9 +30,9 @@ _Populate as you build — non-obvious choices a reader couldn't infer from the 
 
 ## Product
 
-One three-step flow: Your bill, Confirm facts, Your switch brief.
+One five-step flow: Your bill, Confirm facts, Your instructions, Iris calls, Done.
 
-Iris must remain frontend-only: no backend, database, login, external APIs, or live AI. Bill extraction and advice are prewritten Wizard-of-Oz examples. Inputs and feedback are not saved. Keep the prototype disclosure visible throughout.
+Iris must remain frontend-only: no backend, database, login, external APIs, live AI, or real calls. Bill extraction and carrier conversations are prewritten Wizard-of-Oz examples. Inputs and feedback are not saved. Keep the prototype disclosure visible throughout, including simulated incoming-call screens. Cancellation or PIN issuance requires the user's final approval.
 
 ## User preferences
 

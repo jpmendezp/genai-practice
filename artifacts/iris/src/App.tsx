@@ -3,11 +3,14 @@ import { SAMPLES, factsFor, type Facts, type LineFacts, type Profile } from "@/l
 import { FACT_KEYS, MAX_LINES, checkBill, isInt, isUnsupported, matchProfile, resizeLines, type FactKey } from "@/lib/iris-logic";
 import { StepBill } from "@/components/iris/StepBill";
 import { StepFacts } from "@/components/iris/StepFacts";
-import { StepBrief } from "@/components/iris/StepBrief";
+import { StepInstructions } from "@/components/iris/StepInstructions";
+import { StepCall } from "@/components/iris/StepCall";
+import { StepDone } from "@/components/iris/StepDone";
+import { defaultInstructions, type CallResult, type Instructions } from "@/lib/call-machine";
 import { cn } from "@/lib/utils";
 
 const noChecks = () => Object.fromEntries(FACT_KEYS.map((k) => [k, false])) as Record<FactKey, boolean>;
-const STEPS = ["Your bill", "Confirm facts", "Your switch brief"];
+const STEPS = ["Your bill", "Confirm facts", "Your instructions", "Iris calls", "Done"];
 
 function App() {
   const [step, setStep] = useState(1);
@@ -19,8 +22,11 @@ function App() {
   const [profile, setProfile] = useState<Profile>("A");
   const [facts, setFacts] = useState<Facts>(factsFor("A"));
   const [checks, setChecks] = useState(noChecks);
-  const [checklist, setChecklist] = useState<boolean[]>([false, false, false, false, false]);
-  const [outcome, setOutcome] = useState<string | null>(null);
+  const [checklist, setChecklist] = useState<boolean[]>([false, false, false]);
+  const [ins, setIns] = useState<Instructions>(defaultInstructions);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [result, setResult] = useState<CallResult | null>(null);
+  const [callKey, setCallKey] = useState(0);
   const timer = useRef<number | null>(null);
   const mainRef = useRef<HTMLElement>(null);
 
@@ -65,13 +71,14 @@ function App() {
   const restart = () => {
     if (timer.current) clearTimeout(timer.current);
     setStep(1); setCarrier(""); setText(""); setSample(null); setError(null); setReading(false);
-    setProfile("A"); setFacts(factsFor("A")); setChecks(noChecks()); setChecklist([false, false, false, false, false]); setOutcome(null);
+    setProfile("A"); setFacts(factsFor("A")); setChecks(noChecks()); setChecklist([false, false, false]);
+    setIns(defaultInstructions()); setNotice(null); setResult(null); setCallKey((k) => k + 1);
   };
 
   return (
     <div className="min-h-[100dvh] bg-background">
-      <div role="note" className="bg-[hsl(232_30%_16%)] px-4 py-2 text-center text-xs font-medium leading-snug text-[hsl(40_40%_94%)]" data-testid="text-banner">
-        Prototype: bill reading and briefs are prewritten examples, not live AI analysis.
+      <div role="note" className="sticky top-0 z-50 bg-[hsl(232_30%_16%)] px-4 py-2 text-center text-xs font-medium leading-snug text-[hsl(40_40%_94%)]" data-testid="text-banner">
+        Prototype: the call is simulated. Iris does not actually contact any carrier.
       </div>
       <div className="mx-auto max-w-2xl px-4 pb-10">
         <header className="flex items-center gap-2.5 py-5">
@@ -84,7 +91,7 @@ function App() {
         </header>
 
         <nav aria-label="Progress" className="mb-7">
-          <ol className="grid grid-cols-3 gap-2">
+          <ol className="grid grid-cols-5 gap-1.5 sm:gap-2">
             {STEPS.map((s, i) => {
               const n = i + 1;
               return (
@@ -92,7 +99,7 @@ function App() {
                   <div className="h-1.5 overflow-hidden rounded-full bg-muted">
                     <div className={cn("h-full origin-left rounded-full bg-primary transition-transform duration-500", step >= n ? "scale-x-100" : "scale-x-0")} />
                   </div>
-                  <p className={cn("text-xs sm:text-sm", step === n ? "font-semibold text-foreground" : "text-muted-foreground")}>
+                  <p className={cn("text-[11px] leading-tight sm:text-sm", step === n ? "font-semibold text-foreground" : "text-muted-foreground")}>
                     <span className="tnum">{n}</span> {s}
                   </p>
                 </li>
@@ -119,17 +126,31 @@ function App() {
             />
           )}
           {step === 3 && (
-            <StepBrief
-              facts={facts} profile={profile} checklist={checklist}
+            <StepInstructions
+              facts={facts} ins={ins} notice={notice}
+              onChange={(patch) => setIns((x) => ({ ...x, ...patch }))}
+              onBack={() => { setNotice(null); setStep(2); }}
+              onStart={() => { setNotice(null); setResult(null); setCallKey((k) => k + 1); setStep(4); }}
+            />
+          )}
+          {step === 4 && (
+            <StepCall
+              key={callKey} facts={facts} profile={profile} ins={ins}
+              onEnd={(n) => { setNotice(n); setStep(3); }}
+              onDone={(r) => { setResult(r); setChecklist([false, false, false]); setStep(5); }}
+            />
+          )}
+          {step === 5 && result && (
+            <StepDone
+              facts={facts} result={result} checklist={checklist}
               onChecklist={(i, v) => setChecklist((c) => c.map((x, j) => (j === i ? v : x)))}
-              outcome={outcome} onOutcome={setOutcome}
-              onBackFacts={() => setStep(2)} onRestart={restart}
+              onInstructions={() => { setNotice(null); setStep(3); }} onRestart={restart}
             />
           )}
         </main>
 
         <footer className="mt-12 border-t border-border pt-5 text-sm text-muted-foreground">
-          Iris doesn't contact your carrier for you and isn't legal advice. It explains what your own bill says.
+          Iris isn't legal advice. In this prototype the call is prewritten.
         </footer>
       </div>
     </div>

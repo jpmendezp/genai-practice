@@ -1,9 +1,11 @@
 import { SAMPLES, factsFor, type Facts, type LineFacts, type Profile } from "./iris-data";
 import { MAX_LINES, isInt, isMoney, num, resizeLines, totals, usd } from "./iris-logic";
 import { HOLDER, SAMPLE_PIN } from "./call-machine";
+import { buildRestatement, canonCarrier, parseIntent, safeModelRestatement, understandWithTimeout, type ParsedIntent, type UnderstandFn } from "./intent-parser";
+import { buildAlternatives, type Alternatives } from "./alternatives";
 
 export type Stage =
-  | "intent" | "carrier" | "bill" | "reading" | "confirm" | "edit" | "promo" | "rule" | "consent" | "notyet"
+  | "intent" | "goal" | "carrier" | "lowconf" | "restate" | "change" | "mismatch" | "editcarrier" | "alts" | "waiting" | "bill" | "reading" | "confirm" | "edit" | "promo" | "rule" | "consent" | "notyet"
   | "call" | "offer" | "ring" | "incall" | "hold" | "expired" | "callback" | "done";
 export type Speaker = "Carrier bot" | "Carrier agent" | "Iris" | "note";
 export interface Line { id: number; speaker: Speaker; text: string }
@@ -12,12 +14,13 @@ export type Outcome = "cancelled" | "pin" | "kept";
 export interface Result {
   outcome: Outcome; carrier: string; plan: string; conf: string; target: string; exit: number; giveUp: number;
   declined: number; offer: { monthly: number; months: number } | null; newPrice: number | null; pin: string | null;
-  finalBill: string | null;
+  finalBill: string | null; toCarrier: string | null;
 }
 export type Msg = { id: string; at: number } & (
   | { from: "user"; kind: "text"; text: string }
   | { from: "user"; kind: "image"; profile: Profile }
-  | { from: "iris"; kind: "text"; text: string }
+  | { from: "iris"; kind: "text"; text: string; tag?: "ai" | "keyword" }
+  | { from: "iris"; kind: "note"; text: string }
   | { from: "iris"; kind: "bill"; facts: Facts; guess: boolean }
   | { from: "iris"; kind: "result"; result: Result }
   | { from: "iris"; kind: "copy"; text: string }
@@ -42,30 +45,20 @@ const C = {
   transcript: { id: "transcript", label: "See live transcript" }, skip: { id: "skip", label: "Skip ahead" },
   take: { id: "take", label: "Take the deal" }, declineOffer: { id: "decline-offer", label: "Decline" },
   callme: { id: "callme", label: "Call me now" }, callback: { id: "callback", label: "Call them back" },
-  copy: { id: "copy", label: "Copy details" }, over: { id: "over", label: "Start over" },
+  copy: { id: "copy", label: "Copy details" },
+  mint: { id: "c-mint", label: "Mint Mobile" }, cricket: { id: "c-cricket", label: "Cricket" }, metro: { id: "c-metro", label: "Metro by T-Mobile" },
+  right: { id: "right", label: "Yes, that's right" }, change: { id: "change", label: "Change something" },
+  cancelInstead: { id: "cancel-instead", label: "Cancel instead" }, switchInstead: { id: "switch-instead", label: "Switch instead" },
+  wrongCarrier: { id: "wrong-carrier", label: "Wrong carrier" },
+  leaveNow: { id: "leave-now", label: "Leave now" }, better: { id: "better", label: "Ask for a better deal first" },
+  leaveAnyway: { id: "leave-anyway", label: "Leave now anyway" }, over: { id: "over", label: "Start over" },
 } satisfies Record<string, Chip>;
 const INTENT = [C.cancel, C.switch];
 const CONFIRM = [C.yes, C.off];
 const CALL = [C.transcript, C.skip];
 
 /* ---------- text parsing ---------- */
-export function carrierOf(t: string): string | null {
-  const s = t.toLowerCase();
-  if (/t[\s-]?mobile|\btmo\b|magenta/.test(s)) return "T-Mobile";
-  if (/verizon|\bvzw?\b/.test(s)) return "Verizon";
-  if (/at\s?&\s?t|\batt\b|at and t/.test(s)) return "AT&T";
-  return null;
-}
-const OTHERS: [RegExp, string][] = [
-  [/cricket/, "Cricket"], [/mint/, "Mint Mobile"], [/visible/, "Visible"], [/metro/, "Metro"], [/boost/, "Boost Mobile"],
-  [/google fi|\bfi\b/, "Google Fi"], [/us cellular|uscellular/, "US Cellular"], [/xfinity/, "Xfinity Mobile"],
-  [/spectrum/, "Spectrum Mobile"], [/straight talk/, "Straight Talk"], [/\bother\b|someone else|different one/, "Other"],
-];
-export function otherOf(t: string): string | null {
-  const s = t.toLowerCase();
-  for (const [r, l] of OTHERS) if (r.test(s)) return l;
-  return null;
-}
+const CARRIER_CHIPS = [C.tmo, C.vz, C.att, C.mint, C.cricket, C.metro, C.other];
 export function goalOf(t: string): "pin" | "cancel" | null {
   const s = t.toLowerCase();
   if (/switch|\bport|keep (my |the )?(phone )?number|transfer|move (my )?number|new carrier/.test(s)) return "pin";
@@ -99,7 +92,6 @@ const RE = {
 const clone = (f: Facts): Facts => ({ ...f, perLine: f.perLine.map((l) => ({ ...l })) });
 const money0 = (n: number) => usd(n).replace(".00", "");
 const profileFor = (carrier: string): Profile => (carrier === "Verizon" ? "B" : carrier === "AT&T" ? "C" : "A");
-const isBig3 = (c: string) => c === "T-Mobile" || c === "Verizon" || c === "AT&T";
 
 /** Split prewritten Iris copy into short bubbles (two lines max on a narrow phone). */
 export function chunk(text: string, max = 52): string[] {
@@ -144,6 +136,7 @@ const normalize = (f: Facts): Facts => ({
 
 export function resultText(r: Result): string {
   const L = ["IRIS CALL SUMMARY (simulated, fictional details)", `${r.carrier} - ${r.plan}`];
+  if (r.toCarrier && r.outcome === "pin") L.push(`Switching to: ${r.toCarrier}`);
   if (r.outcome === "kept") {
     L.push("Outcome: You're staying. Nothing was cancelled and no PIN was issued.",
       `Deal: ${money0(r.offer!.monthly)}/mo off for ${r.offer!.months} months`, `New monthly price: ${usd(r.newPrice!)}`,
@@ -181,6 +174,26 @@ export class IrisController {
   private holdTimer: ReturnType<typeof setTimeout> | null = null;
   private skipNext = false;
   private result: Result | null = null;
+  // intent context
+  private toCarrier: string | null = null;
+  private keepNumber: boolean | null = null;
+  private lowConf = false;
+  private modelRestatement: string | null = null;
+  private intentTag: "ai" | "keyword" | null = null;
+  private aiTried = false;
+  private pending = false;
+  private abortIntent: (() => void) | null = null;
+  private pendingSample: Profile | null = null;
+  private pendingEdit: Facts | null = null;
+  private alts: Alternatives | null = null;
+  private understand: UnderstandFn | null;
+  private intentTimeout: number;
+  private now: () => Date;
+  constructor(opts: { understand?: UnderstandFn | null; intentTimeoutMs?: number; now?: () => Date } = {}) {
+    this.understand = opts.understand ?? null;
+    this.intentTimeout = opts.intentTimeoutMs ?? 6000;
+    this.now = opts.now ?? (() => new Date());
+  }
   timing = { min: 600, max: 1200, phase: [0, 6000, 5000, 7000, 5000, 4500, 3500, 3000], scale: 1 };
 
   static initial(): IrisState {
@@ -206,12 +219,15 @@ export class IrisController {
     this.timers.forEach(clearTimeout);
     this.timers.clear();
     this.q = []; this.running = false;
+    this.abortIntent?.(); this.abortIntent = null; this.pending = false;
   }
   start() {
     this.dispose();
     this.goal = null; this.carrier = null; this.profile = "A"; this.promoUnsure = false;
     this.rule = { kind: "decline", threshold: 20 }; this.declined = 0; this.offer = null; this.awaiting = null;
     this.phaseTimer = null; this.holdTimer = null; this.skipNext = false; this.result = null;
+    this.toCarrier = null; this.keepNumber = null; this.lowConf = false; this.modelRestatement = null; this.intentTag = null;
+    this.aiTried = false; this.pendingSample = null; this.pendingEdit = null; this.alts = null;
     this.state = IrisController.initial();
     this.listeners.forEach((l) => l());
     this.say("Hey! I'm Iris 👋", "I call companies for you,", "so you don't have to deal with bots and hold music.", "What do you need?");
@@ -224,13 +240,13 @@ export class IrisController {
   private pump() {
     for (;;) {
       const it = this.q.shift();
-      if (!it) { this.running = false; if (this.state.typing) this.set({ typing: false }); return; }
+      if (!it) { this.running = false; if (this.state.typing && !this.pending) this.set({ typing: false }); return; }
       this.running = true;
       if (it.t === "do") { it.fn(); continue; }
       this.set({ typing: true });
       const ms = this.timing.min + Math.random() * (this.timing.max - this.timing.min);
       this.after(ms, () => {
-        this.set({ typing: false, messages: [...this.state.messages, { ...it.msg, at: Date.now() }] });
+        this.set({ typing: this.pending, messages: [...this.state.messages, { ...it.msg, at: Date.now() }] });
         this.after(140, () => this.pump());
       });
       return;
@@ -238,6 +254,10 @@ export class IrisController {
   }
   private say(...texts: string[]) {
     this.enqueue(texts.flatMap((t) => chunk(t)).map((text) => ({ t: "msg" as const, msg: { id: this.id(), at: 0, from: "iris" as const, kind: "text" as const, text } })));
+  }
+  private tagged(tag: "ai" | "keyword" | null, ...texts: string[]) {
+    const parts = texts.flatMap((t) => chunk(t));
+    this.enqueue(parts.map((text, i) => ({ t: "msg" as const, msg: { id: this.id(), at: 0, from: "iris" as const, kind: "text" as const, text, ...(tag && i === parts.length - 1 ? { tag } : {}) } })));
   }
   private card(msg: Msg) { this.enqueue([{ t: "msg", msg }]); }
   private then(fn: () => void) { this.enqueue([{ t: "do", fn }]); }
@@ -247,6 +267,7 @@ export class IrisController {
     this.set({ transcript: [...this.state.transcript, ...ls.map(([speaker, text]) => ({ id: ++this.lineSeq, speaker, text }))] });
   }
   private get cname() { return !this.carrier || this.carrier === "Other" ? "your carrier" : this.carrier; }
+  private get leaving() { return !this.carrier || this.carrier === "Other" ? "another carrier" : this.carrier; }
   private get Cname() { const c = this.cname; return c[0].toUpperCase() + c.slice(1); }
 
   /* ---------- public input ---------- */
@@ -255,23 +276,59 @@ export class IrisController {
     if (c.id === "transcript") return this.set({ sheet: "transcript" });
     if (c.id === "skip") return this.skip();
     if (c.id === "copy") return void this.copy();
-    this.send(c.label);
+    this.send(c.label, "chip", c.id);
   }
   openSamples() { if (this.state.stage === "bill") this.set({ sheet: "samples" }); }
   closeSheet() { this.set({ sheet: null }); }
   openTranscript() { this.set({ sheet: "transcript" }); }
 
-  send(raw: string) {
+  send(raw: string, origin: "text" | "chip" = "text", chipId?: string) {
     const text = raw.trim();
     if (!text) return;
     this.user({ id: this.id(), at: Date.now(), from: "user", kind: "text", text });
     const s = text.toLowerCase();
     if (RE.restart.test(s)) return this.start();
+    if (this.pending) return; // waiting on the model; the first answer wins
+    const id = origin === "chip" ? chipId : undefined;
     if (RE.transcript.test(s) && this.state.transcript.length) return this.set({ sheet: "transcript" });
     const st = this.state.stage;
     switch (st) {
-      case "intent": return this.onIntent(s);
+      case "intent": return this.onIntent(text, origin);
+      case "goal": case "lowconf": return this.onGoal(s);
       case "carrier": return this.onCarrier(s);
+      case "restate":
+        if (id === "right" || (!id && isYes(s) && !RE.off.test(s))) return this.askBill();
+        if (id === "change") return this.changeMenu();
+        if (this.correct(s)) return;
+        if (RE.off.test(s) || /change/.test(s)) return this.changeMenu();
+        return this.say("Is that right?", "Say yes, or tell me what to change.");
+      case "change":
+        if (id === "wrong-carrier" || (!id && /carrier|wrong/.test(s) && !this.mentions(s))) return this.askCarrier(true);
+        if (id === "cancel-instead") return this.setGoal("cancel");
+        if (id === "switch-instead") return this.setGoal("pin");
+        if (this.correct(s)) return;
+        return this.say("What should I change?", "Cancel instead, switch instead, or the carrier?");
+      case "mismatch": {
+        const bill = SAMPLES.find((x) => x.id === this.pendingSample)?.carrier;
+        if (id === "mm-bill" || (!id && bill && canonCarrier(s) === bill)) return this.acceptMismatchBill();
+        if (id === "mm-stated" || (!id && /another|other bill|send|stated/.test(s)) || (!id && this.carrier && canonCarrier(s) === this.carrier)) return this.rejectMismatchBill();
+        return this.say("Which account should I call about?", "The bill's carrier, or the one you told me?");
+      }
+      case "editcarrier":
+        if (id === "ec-yes" || (!id && isYes(s) && !/keep/.test(s))) return this.resolveEdit(true);
+        if (id === "ec-keep" || (!id && /keep|no\b|original/.test(s))) return this.resolveEdit(false);
+        return this.say("Should I switch which carrier I call?", "Yes, or keep the original?");
+      case "alts":
+        if (id === "leave-now") return this.leaveNow();
+        if (id === "better") return this.askBetter();
+        if (id === "wait") return this.wait();
+        if (/wait|later|until|remind|hold off/.test(s)) return this.alts?.horizon ? this.wait() : this.say("Waiting wouldn't save you much here.", "Leave now, or ask for a better deal first?");
+        if (/deal|negotiat|better|discount|cheaper|lower|bargain/.test(s)) return this.askBetter();
+        if (/\bnow\b|leave|go ahead|just do it/.test(s) || isYes(s)) return this.leaveNow();
+        return this.say("Leave now, or ask for a better deal first?");
+      case "waiting":
+        if (id === "leave-anyway" || /now|anyway|leave|go ahead/.test(s) || isYes(s)) return this.leaveNow();
+        return this.say("I'm holding off.", "Say leave now anyway whenever you change your mind.");
       case "bill":
         if (RE.nobill.test(s)) return this.noBill();
         if (RE.attach.test(s) || /\bbill\b/.test(s)) { this.set({ sheet: "samples" }); return; }
@@ -324,54 +381,158 @@ export class IrisController {
   }
 
   /* ---------- flow ---------- */
-  private onIntent(s: string) {
-    const g = goalOf(s);
-    const c = carrierOf(s) ?? (g ? otherOf(s) : null);
-    if (c) this.carrier = c;
-    this.set({ carrierName: this.cname });
-    if (g) {
-      this.goal = g;
-      this.set({ chips: [] });
-      if (this.carrier) return this.askBill(`Got it, ${this.cname}.`);
-      return this.askCarrier();
+  private onIntent(text: string, origin: "text" | "chip") {
+    this.set({ chips: [] });
+    if (origin === "text" && !this.aiTried && this.understand) {
+      this.aiTried = true;
+      const g = this.gen;
+      const call = understandWithTimeout(this.understand, text, this.intentTimeout);
+      this.abortIntent = call.abort;
+      this.pending = true;
+      this.set({ typing: true });
+      void call.promise.then((m) => {
+        if (g !== this.gen) return; // restarted or unmounted; drop late answer
+        this.pending = false; this.abortIntent = null;
+        if (m) console.info("[iris] intent path: AI");
+        else console.info("[iris] intent path: keyword");
+        this.applyIntent(m ?? parseIntent(text), m ? "ai" : "keyword");
+      });
+      return;
     }
-    if (c) return this.say(`${c}, got it.`, "Do you want to cancel,", "or switch and keep your number?");
-    this.say("I can only help with phone plans for now.", "Want to cancel or switch?");
+    if (origin === "text" && !this.aiTried) { this.aiTried = true; console.info("[iris] intent path: keyword"); }
+    const p = parseIntent(text);
+    if (origin === "chip") p.keepNumber = p.goal === "switch" ? true : null;
+    this.applyIntent(p, origin === "text" ? "keyword" : null);
   }
-  private askCarrier() {
+  private applyIntent(p: ParsedIntent, tag: "ai" | "keyword" | null) {
+    this.intentTag = tag;
+    this.goal = p.goal === "switch" ? "pin" : p.goal === "cancel" ? "cancel" : null;
+    if (p.fromCarrier) this.carrier = p.fromCarrier;
+    this.toCarrier = this.goal === "cancel" ? null : p.toCarrier;
+    this.keepNumber = this.goal === "pin" ? p.keepNumber : null;
+    // If a fact is missing, asking for that fact resolves the uncertainty.
+    // A separate check is only needed for a complete but low-confidence parse.
+    this.lowConf = p.confidence === "low" && p.goal !== "unclear" && !!p.fromCarrier;
+    this.modelRestatement = tag === "ai" ? safeModelRestatement(p) : null;
+    this.set({ carrierName: this.cname });
+    this.next();
+  }
+  /** Ask for whatever is missing, then restate. */
+  private next() {
+    if (!this.goal) {
+      this.set({ stage: "goal", chips: [] });
+      this.say("Do you want to cancel your plan,", "or switch carriers and keep your number?");
+      return this.chips(INTENT);
+    }
+    if (!this.carrier) return this.askCarrier(false);
+    if (this.lowConf) {
+      this.set({ stage: "lowconf", chips: [] });
+      this.say(`Quick check, so I get this right:`, `are you canceling, or switching away from ${this.leaving}?`);
+      return this.chips([C.cancel, C.switch]);
+    }
+    this.restate();
+  }
+  private restate() {
+    const g = this.goal === "pin" ? "switch" : "cancel";
+    const r = this.modelRestatement ?? buildRestatement(g, this.carrier, this.toCarrier, this.keepNumber);
+    this.set({ stage: "restate", chips: [] });
+    this.tagged(this.intentTag, r, "Right?");
+    this.chips([C.right, C.change]);
+  }
+  private onGoal(s: string) {
+    const p = parseIntent(s);
+    const g = p.goal === "switch" ? "pin" : p.goal === "cancel" ? "cancel" : goalOf(s);
+    if (!g) return this.say("Cancel your plan,", "or switch carriers and keep your number?");
+    if (p.fromCarrier && !this.carrier) this.carrier = p.fromCarrier;
+    if (p.toCarrier && g === "pin") this.toCarrier = p.toCarrier;
+    this.setGoal(g, p.keepNumber ?? (/keep/.test(s) ? true : null));
+  }
+  private setGoal(g: "pin" | "cancel", keep: boolean | null = null) {
+    this.goal = g; this.lowConf = false; this.modelRestatement = null;
+    if (g === "cancel") { this.toCarrier = null; this.keepNumber = null; }
+    else if (keep !== null) this.keepNumber = keep;
+    this.set({ chips: [] });
+    this.next();
+  }
+  private mentions(s: string) { return !!canonCarrier(s) && canonCarrier(s) !== "Other"; }
+  /** Free-text correction during restate/change. Returns true if handled. */
+  private correct(s: string): boolean {
+    const p = parseIntent(s);
+    const g = p.goal === "switch" ? "pin" : p.goal === "cancel" ? "cancel" : null;
+    if (!g && !p.fromCarrier && !p.toCarrier) return false;
+    if (g) this.goal = g;
+    if (p.fromCarrier) this.carrier = p.fromCarrier;
+    if (p.toCarrier && this.goal === "pin") this.toCarrier = p.toCarrier;
+    if (this.goal === "cancel") { this.toCarrier = null; this.keepNumber = null; }
+    else if (p.keepNumber !== null) this.keepNumber = p.keepNumber;
+    if (this.toCarrier === this.carrier) this.toCarrier = null;
+    this.lowConf = false; this.modelRestatement = null;
+    this.set({ chips: [], carrierName: this.cname });
+    this.next();
+    return true;
+  }
+  private changeMenu() {
+    this.set({ stage: "change", chips: [] });
+    this.say("Sure. What should I change?");
+    this.chips([C.cancelInstead, C.switchInstead, C.wrongCarrier]);
+  }
+  private askCarrier(wrong: boolean) {
+    if (wrong) { this.carrier = null; this.modelRestatement = null; }
     this.set({ stage: "carrier", chips: [] });
-    this.say("Got it. Who's your carrier?");
-    this.chips([C.tmo, C.vz, C.att, C.other]);
+    this.say("Who's your carrier right now?");
+    this.chips(CARRIER_CHIPS);
   }
   private onCarrier(s: string) {
-    const c = carrierOf(s) ?? otherOf(s);
-    if (!c) {
-      const g = goalOf(s);
-      if (g) this.goal = g;
-      return this.say("Just need your carrier.", "T-Mobile, Verizon, AT&T, or another one?");
-    }
+    const p = parseIntent(s);
+    const c = p.fromCarrier ?? canonCarrier(s);
+    if (!c) return this.say("Just need your current carrier.", "T-Mobile, Verizon, AT&T, or another one?");
     this.carrier = c;
+    if (this.toCarrier === c) this.toCarrier = null;
+    this.modelRestatement = null;
     this.set({ carrierName: this.cname, chips: [] });
-    this.askBill(c === "Other" ? "No problem." : undefined);
+    this.next();
   }
-  private askBill(prefix?: string) {
+  private askBill() {
     this.set({ stage: "bill", chips: [] });
-    if (prefix) this.say(prefix);
     this.say("Send me a screenshot of your latest bill", "so I can see what leaving really costs.");
     this.chips([C.attach, C.nobill]);
   }
   pickSample(id: Profile) {
     if (this.state.stage !== "bill") return;
     const sample = SAMPLES.find((x) => x.id === id)!;
-    this.set({ sheet: null, chips: [], stage: "reading" });
     this.user({ id: this.id(), at: Date.now(), from: "user", kind: "image", profile: id });
+    if (this.carrier && this.carrier !== sample.carrier) {
+      this.pendingSample = id;
+      this.set({ sheet: null, chips: [], stage: "mismatch" });
+      this.say(`Heads up: this bill is from ${sample.carrier},`, `but you said you're leaving ${this.leaving}.`, "Which account should I call about?");
+      return this.chips([{ id: "mm-bill", label: sample.carrier }, { id: "mm-stated", label: `${this.leaving === "another carrier" ? "My other carrier" : this.leaving}, I'll send another bill` }]);
+    }
+    this.readBill(id);
+  }
+  private acceptMismatchBill() {
+    const id = this.pendingSample;
+    if (!id) return;
+    const c = SAMPLES.find((x) => x.id === id)!.carrier;
+    this.pendingSample = null;
+    this.carrier = c;
+    if (this.toCarrier === c) this.toCarrier = null;
+    this.set({ carrierName: this.cname, chips: [] });
+    this.say(`Okay, I'll call ${c}.`);
+    this.readBill(id);
+  }
+  private rejectMismatchBill() {
+    this.pendingSample = null;
+    this.set({ stage: "bill", chips: [] });
+    this.say(`Okay. Send your ${this.cname} bill when you have it.`);
+    this.then(() => this.set({ sheet: "samples", chips: [C.attach, C.nobill] }));
+  }
+  private readBill(id: Profile) {
+    this.set({ sheet: null, chips: [], stage: "reading" });
     this.profile = id;
     const f = factsFor(id);
-    if (this.carrier && !isBig3(this.carrier)) f.carrier = this.carrier;
-    else this.carrier = sample.carrier;
+    this.carrier = f.carrier;
     this.set({ facts: f, carrierName: this.cname });
     this.say("Reading your bill...");
-    this.then(() => {}); // keeps ordering explicit
     this.card({ id: this.id(), at: 0, from: "iris", kind: "bill", facts: clone(f), guess: false });
     this.say("Does this look right?");
     this.then(() => this.set({ stage: "confirm", chips: CONFIRM }));
@@ -379,7 +540,7 @@ export class IrisController {
   private noBill() {
     this.profile = profileFor(this.carrier ?? "");
     const f = factsFor(this.profile);
-    if (this.carrier && !isBig3(this.carrier)) f.carrier = this.carrier;
+    if (this.carrier) f.carrier = this.carrier;
     this.set({ facts: f, chips: [], stage: "reading" });
     this.say("No problem. I'll confirm the numbers on the call.", `Here's a typical ${this.cname} plan like yours:`);
     this.card({ id: this.id(), at: 0, from: "iris", kind: "bill", facts: clone(f), guess: true });
@@ -412,8 +573,24 @@ export class IrisController {
     const errs = validate(d);
     if (errs.length) { this.set({ errors: errs }); return this.say("I can't save that yet.", ...errs); }
     const f = normalize(d);
-    if (!isBig3(f.carrier)) this.carrier = f.carrier; else this.carrier = f.carrier;
     const id = this.state.editingId;
+    const c = canonCarrier(f.carrier) ?? f.carrier;
+    if (c !== this.state.facts.carrier && c !== this.carrier) {
+      this.pendingEdit = f;
+      this.set({ stage: "editcarrier", chips: [] });
+      this.say(`You changed the carrier to ${f.carrier}.`, `Should I call ${f.carrier} instead of ${this.cname}?`);
+      return this.chips([{ id: "ec-yes", label: `Yes, call ${f.carrier}` }, { id: "ec-keep", label: `Keep ${this.cname}` }]);
+    }
+    this.commitEdit(f, id);
+  }
+  private resolveEdit(accept: boolean) {
+    const f = this.pendingEdit;
+    if (!f) return;
+    this.pendingEdit = null;
+    if (accept) { this.carrier = f.carrier; if (this.toCarrier === f.carrier) this.toCarrier = null; }
+    this.commitEdit(accept ? f : { ...f, carrier: this.state.facts.carrier }, this.state.editingId);
+  }
+  private commitEdit(f: Facts, id: string | null) {
     this.set({
       facts: f, draft: null, editingId: null, errors: [], stage: "confirm", chips: [], carrierName: this.cname,
       messages: this.state.messages.map((m) => (m.id === id && m.kind === "bill" ? { ...m, facts: clone(f) } : m)),
@@ -436,19 +613,55 @@ export class IrisController {
       this.say(`Quick one: does the ${money0(num(l2.promoAmount))} credit apply`, "to both lines or just line 2?");
       return this.chips([C.l2, C.both, C.unsure]);
     }
-    this.askRule("Great.");
+    this.offerAlternatives();
+  }
+  private offerAlternatives() {
+    const a = buildAlternatives(this.state.facts, this.now(), { ignoreCredits: this.promoUnsure });
+    this.alts = a;
+    this.set({ stage: "alts", chips: [] });
+    this.say(...a.reasons);
+    this.say(a.monthLabel ? `Leave now, ask for a better deal,` : "Leave now, or ask for a better deal first?", ...(a.monthLabel ? [`or wait until ${a.monthLabel}?`] : []));
+    this.chips([C.leaveNow, C.better, ...(a.monthLabel ? [{ id: "wait", label: `Wait until ${a.monthLabel}` }] : [])]);
+  }
+  private leaveNow() { this.set({ chips: [] }); this.askRule("Okay, leaving now."); }
+  private askBetter() {
+    this.rule = { kind: "ask", threshold: 20 };
+    this.set({ chips: [], stage: "consent" });
+    this.say("Got it. I'll push for a better deal", "and check with you on anything over $20/mo off.");
+    this.askConsent();
+  }
+  private wait() {
+    const m = this.alts?.monthLabel;
+    if (!m) return this.leaveNow();
+    this.set({ stage: "waiting", chips: [] });
+    this.say(`Okay, I'll remind you in ${m}.`, "Nothing was canceled.");
+    this.card({ id: this.id(), at: 0, from: "iris", kind: "note", text: "Reminder is simulated; no real notification scheduled." });
+    this.chips([C.leaveAnyway, C.over]);
+  }
+  private aligned() { return !!this.carrier && this.state.facts.carrier === this.carrier; }
+  private askConsent() {
+    if (!this.aligned()) return this.misaligned();
+    this.say(`Can I call ${this.cname} for you?`, "I won't approve anything final without you.");
+    this.chips([C.go, C.notyet]);
+  }
+  private misaligned() {
+    this.set({ stage: "bill", chips: [] });
+    this.say("Your bill and carrier don't match yet.", "Send a bill for the account I should call.");
+    this.chips([C.attach, C.nobill]);
   }
   private onPromo(k: "l2" | "both" | "unsure") {
     this.set({ chips: [] });
     if (k === "both") {
       const f = this.state.facts, src = f.perLine[1];
       this.updateConfirmedFacts({ ...f, perLine: f.perLine.map((l) => ({ ...l, promoApplies: true, promoAmount: src.promoAmount, promoMonths: src.promoMonths })) });
-      return this.askRule(`Got it, both lines. That's ${usd(totals(this.state.facts).giveUp)} in credits.`);
+      this.say(`Got it, both lines. That's ${usd(totals(this.state.facts).giveUp)} in credits.`);
+      return this.offerAlternatives();
     }
-    if (k === "unsure") { this.promoUnsure = true; return this.askRule("No worries. I'll ask them on the call."); }
+    if (k === "unsure") { this.promoUnsure = true; this.say("No worries. I'll ask them on the call."); return this.offerAlternatives(); }
     const f = this.state.facts;
     this.updateConfirmedFacts({ ...f, perLine: f.perLine.map((l, i) => i === 1 ? l : { ...l, promoApplies: false, promoAmount: "0", promoMonths: "0" }) });
-    this.askRule("Got it, just line 2.");
+    this.say("Got it, just line 2.");
+    this.offerAlternatives();
   }
   private updateConfirmedFacts(f: Facts) {
     const id = this.lastBillId();
@@ -463,8 +676,7 @@ export class IrisController {
     this.rule = { kind, threshold: Number.isFinite(threshold) ? threshold : 20 };
     this.set({ chips: [], stage: "consent" });
     this.say(kind === "decline" ? "Got it. I'll turn down every offer." : `Got it. I'll check with you on anything over ${money0(this.rule.threshold)}/mo off.`);
-    this.say(`Can I call ${this.cname} for you?`, "I won't approve anything final without you.");
-    this.chips([C.go, C.notyet]);
+    this.askConsent();
   }
   private notYet() {
     this.set({ stage: "notyet", chips: [] });
@@ -474,6 +686,7 @@ export class IrisController {
 
   /* ---------- the call ---------- */
   private startCall() {
+    if (!this.aligned()) return this.misaligned();
     this.declined = 0;
     this.set({ stage: "call", chips: [], transcript: [], call: { startedAt: Date.now() } });
     this.runPhase(1);
@@ -572,7 +785,7 @@ export class IrisController {
       ["Iris", "Thank you, Maria. That's everything."], ["note", "Call ended."]);
     this.result = {
       outcome: "kept", carrier: this.cname, plan: f.plan, conf: "OFF-48213", target: "Staying", exit: 0, giveUp: 0, declined: this.declined,
-      offer: { monthly: o.monthly, months: o.months }, newPrice: Math.max(0, num(f.monthly) - o.monthly), pin: null, finalBill: null,
+      offer: { monthly: o.monthly, months: o.months }, newPrice: Math.max(0, num(f.monthly) - o.monthly), pin: null, finalBill: null, toCarrier: null,
     };
     this.offer = null;
     this.finish();
@@ -592,7 +805,7 @@ export class IrisController {
     const t = totals(this.state.facts);
     this.set({
       stage: "ring", chips: [], holdUntil: null, sheet: null,
-      caption: `${this.Cname} is ready to ${this.action}. Cost to leave is ${usd(t.exit)} and your last bill is Nov 12. Do you approve?`,
+      caption: `${this.Cname} is ready to ${this.action}${this.goal === "pin" && this.toCarrier ? ` for your switch to ${this.toCarrier}` : ""}. Cost to leave is ${usd(t.exit)} and your last bill is Nov 12. Do you approve?`,
     });
   }
   accept() { if (this.state.stage === "ring") this.set({ stage: "incall" }); }
@@ -636,7 +849,7 @@ export class IrisController {
     this.result = {
       outcome: pin ? "pin" : "cancelled", carrier: this.cname, plan: f.plan, conf: pin ? "PIN-48213" : "CXL-48213",
       target: pin ? "Transfer PIN issued, service active" : act.replace(/^cancel/, "Cancelled"),
-      exit: t.exit, giveUp: t.giveUp, declined: this.declined, offer: null, newPrice: null, pin: pin ? SAMPLE_PIN : null, finalBill: FINAL_BILL,
+      exit: t.exit, giveUp: t.giveUp, declined: this.declined, offer: null, newPrice: null, pin: pin ? SAMPLE_PIN : null, finalBill: FINAL_BILL, toCarrier: pin ? this.toCarrier : null,
     };
     this.finish();
   }

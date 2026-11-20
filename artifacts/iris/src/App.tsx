@@ -44,6 +44,7 @@ function Bubble({ m, s, c, tail }: { m: Msg; s: IrisState; c: IrisController; ta
       onFact={(p) => c.editDraft(p)} onLine={(i, p) => c.editLine(i, p)} onSave={() => c.save()} />;
   if (m.kind === "result") return <ResultCard r={m.result} />;
   if (m.kind === "copy") return <CopyCard text={m.text} />;
+  if (m.kind === "note") return <p className="max-w-[76%] px-1 text-[11.5px] italic text-muted-foreground" data-testid="text-note">{m.text}</p>;
   if (m.kind === "image")
     return <img src={billSvg(m.profile)} alt={billAlt(m.profile)} className="w-[62%] max-w-[210px] rounded-[18px] border border-border" data-testid="img-user-bill" />;
   const user = m.from === "user";
@@ -52,6 +53,11 @@ function Bubble({ m, s, c, tail }: { m: Msg; s: IrisState; c: IrisController; ta
       user ? "bubble-user rounded-[20px]" : "bubble-iris rounded-[20px]",
       tail && (user ? "rounded-br-[6px]" : "rounded-bl-[6px]"))} data-testid={`text-msg-${m.id}`}>
       {m.text}
+      {m.kind === "text" && m.from === "iris" && m.tag && (
+        <span className="mt-1 block text-[10.5px] font-medium text-muted-foreground" data-testid="text-intent-source">
+          {m.tag === "ai" ? "Understood by AI" : "Keyword match (AI unavailable)"}
+        </span>
+      )}
     </p>
   );
 }
@@ -137,7 +143,7 @@ function App() {
   return (
     <div className="page-bg flex h-[100dvh] flex-col items-center overflow-hidden sm:justify-center sm:gap-4 sm:py-4">
       <div role="note" className="relative z-10 flex w-full shrink-0 items-center justify-between gap-3 border-b border-border/60 bg-[hsl(var(--background)/.9)] px-3 pb-1.5 pt-[max(6px,env(safe-area-inset-top))] text-[11.5px] leading-tight text-muted-foreground sm:w-auto sm:rounded-full sm:border sm:px-4 sm:py-1.5 sm:text-[12.5px]" data-testid="text-disclosure">
-        <span>Prototype: Iris's replies and the call are simulated. No carrier is contacted.</span>
+        <span>Prototype: Iris's understanding of your first message uses a live AI model. Bill reading and the call are simulated. No carrier is contacted.</span>
         <button onClick={() => c.start()} className="flex shrink-0 items-center gap-1 font-semibold text-foreground" data-testid="button-restart">
           <RotateCcw className="h-3.5 w-3.5" /> Restart demo
         </button>

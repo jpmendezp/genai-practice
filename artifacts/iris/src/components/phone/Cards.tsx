@@ -104,7 +104,7 @@ export function ResultCard({ r }: { r: Result }) {
     <div className="w-[86%] max-w-[300px] overflow-hidden rounded-[20px] border border-border bg-card" data-testid="card-result">
       <div className="flex items-center gap-2 bg-[hsl(var(--accent))] px-4 py-3 text-[hsl(var(--accent-foreground))]">
         <span className="grid h-6 w-6 place-items-center rounded-full bg-[hsl(var(--live))] text-white"><Check className="h-3.5 w-3.5" strokeWidth={3} /></span>
-        <span className="text-[14px] font-semibold">{kept ? "You're staying, for less" : r.outcome === "pin" ? "Ready to switch" : "Cancellation done"}</span>
+        <span className="text-[14px] font-semibold">{kept ? "You're staying, for less" : r.outcome === "pin" ? (r.toCarrier ? `Ready to switch to ${r.toCarrier}` : "Ready to switch") : "Cancellation done"}</span>
       </div>
       <dl className="divide-y divide-border px-4 py-1.5">
         {kept ? (
@@ -117,6 +117,7 @@ export function ResultCard({ r }: { r: Result }) {
           </>
         ) : (
           <>
+            {r.outcome === "pin" && r.toCarrier && <Row k="Switching to" v={r.toCarrier} testId="text-to-carrier" />}
             <Row k="Done" v={r.target} />
             <Row k="Confirmation" v={r.conf} testId="text-confirmation" />
             {r.pin && <Row k="Transfer PIN" v={r.pin} testId="text-pin" />}

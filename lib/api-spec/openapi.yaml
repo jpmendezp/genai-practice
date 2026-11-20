@@ -11,6 +11,29 @@ tags:
   - name: health
     description: Health operations
 paths:
+  /openai/intent:
+    post:
+      operationId: understandIntent
+      summary: Extract a phone-carrier request without storing it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IntentInput"
+      responses:
+        "200":
+          description: Structured request interpretation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntentUnderstanding"
+        "400":
+          description: Invalid message
+        "429":
+          description: Too many requests
+        "503":
+          description: AI unavailable; use keyword matching
   /healthz:
     get:
       operationId: healthCheck
@@ -26,6 +49,38 @@ paths:
                 $ref: "#/components/schemas/HealthStatus"
 components:
   schemas:
+    IntentInput:
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 2000
+    IntentUnderstanding:
+      type: object
+      additionalProperties: false
+      required: [goal, fromCarrier, toCarrier, keepNumber, confidence, restatement]
+      properties:
+        goal:
+          type: string
+          enum: [cancel, switch, unclear]
+        fromCarrier:
+          type: [string, "null"]
+          maxLength: 80
+        toCarrier:
+          type: [string, "null"]
+          maxLength: 80
+        keepNumber:
+          type: [boolean, "null"]
+        confidence:
+          type: string
+          enum: [high, low]
+        restatement:
+          type: string
+          minLength: 1
+          maxLength: 240
     HealthStatus:
       type: object
       properties:

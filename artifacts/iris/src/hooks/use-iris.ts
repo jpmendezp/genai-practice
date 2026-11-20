@@ -1,9 +1,10 @@
 import { useEffect, useReducer, useRef, useSyncExternalStore } from "react";
+import { understandIntent } from "@workspace/api-client-react";
 import { IrisController } from "@/lib/chat-engine";
 
 export function useIris() {
   const ref = useRef<IrisController | null>(null);
-  if (!ref.current) ref.current = new IrisController();
+  if (!ref.current) ref.current = new IrisController({ understand: (input, opts) => understandIntent(input, opts) });
   const c = ref.current;
   const state = useSyncExternalStore(c.subscribe, c.get);
   useEffect(() => {

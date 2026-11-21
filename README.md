@@ -2,50 +2,52 @@
 
 Iris is an AI agent you text to cancel or switch your phone plan: it calls your carrier for you, gets past the bots and retention offers, and only calls you when it's time to approve.
 
-## What the first working slice does
+**Intended user:** US adults who want to leave or switch their phone carrier but dread the retention call and don't know what leaving will really cost.
+
+## Prototype
+
+**Live app:** https://MyIris.replit.app
+
+Open the link and text Iris what you need (for example, *"I'm moving to Mint Mobile and want to keep my number, can you get me off AT&T?"*), or tap a quick reply. Use **Skip ahead** during the call and **Restart demo** to start over. No login needed. All bills, names and numbers are fictional.
+
+## Demo Video
+
+Draft demo (Google Drive): **[ADD GOOGLE DRIVE LINK]**
+
+Viewing access granted to Emelia Hughes and Samuel Huang. The same file is uploaded to Canvas.
+
+## Assignment documents
+
+| Component | Where |
+| --- | --- |
+| Revision documentation: priority improvements, peer feedback response, 5 test cases, before and after, interpretation, risk response, limitations, next priorities | [revision.md](revision.md) |
+| Draft AI-use disclosure | [ai-use-disclosure.md](ai-use-disclosure.md) |
+| Before and after screenshots | [docs/screenshots/](docs/screenshots/) |
+| Prototype code | [artifacts/iris/](artifacts/iris/) (front end), [artifacts/api-server/](artifacts/api-server/) (server and live AI endpoint) |
+
+## What the prototype does
 
 The prototype is a simulated phone showing a text conversation with Iris. One flow, start to finish:
 
-1. **Ask:** the user texts Iris what they need (cancel or switch carriers), by tapping a quick reply or typing freely.
-2. **Bill:** the user picks their carrier and "attaches" one of three sample bills. Iris replies with a summary card showing the cost to leave, and the user confirms or edits it.
-3. **Instructions:** the user tells Iris how to handle retention offers and authorizes the call.
-4. **The call:** Iris sends live updates while she calls the carrier (bot, hold, human agent, offers declined). A full transcript is available. If an offer passes the user's limit, Iris texts to ask.
-5. **Approval:** Iris "calls" the user. The user picks up and approves the cancellation.
-6. **Done:** Iris sends a confirmation card with confirmation number, final bill date, cost to leave, and number transfer PIN if switching.
-
-## How to open it
-
-Prototype: https://MyIris.replit.app
-
-Open the link and start texting Iris, or tap the quick replies. Use **Skip ahead** during the call to go faster and **Restart demo** to start over. No login needed.
+1. **Ask:** the user texts Iris what they need. A live AI model reads the message.
+2. **Confirm:** Iris restates it ("Switching from AT&T to Mint Mobile and keeping your number, right?") and waits for the user to confirm or correct it. If something is missing, she asks for it.
+3. **Bill:** the user "attaches" one of three sample bills. If the bill's carrier doesn't match, Iris asks which account to call about. Iris shows the cost to leave, which the user can confirm or edit.
+4. **Options:** Iris offers 2 or 3 choices (leave now, ask for a better deal first, or wait until credits end), each with a short reason.
+5. **The call:** Iris sends live updates while she "calls" the carrier, and texts the user if an offer passes their limit.
+6. **Approval and done:** Iris "calls" the user to approve, then sends a confirmation card.
 
 ## AI status
 
 | Part | Status |
 | --- | --- |
-| Understanding what the user wants from their message | **Simulated.** Simple keyword matching stands in for an AI model. |
+| Understanding the user's first message (goal, carrier leaving, carrier joining, keep number) | **Live AI.** OpenAI gpt-5.4-mini through Replit AI Integrations. Falls back to keyword matching if the model fails; each restatement is labeled "Understood by AI" or "Keyword match". |
+| Confirm step and carrier mismatch check | **Working.** Rules, no AI. |
 | Reading the bill and extracting plan facts | **Simulated.** Prewritten results for three sample bills. |
-| Making the call (phone menu, carrier bot, human agent, retention offers) | **Simulated.** Prewritten transcript and updates. No real call is placed. |
-| Asking the user mid call and calling the user to approve | **Simulated.** Shown on screen as a text and a fake incoming call. |
-| Cost to leave from confirmed facts | **Working.** Basic arithmetic, recalculates when the user edits a value. |
-| Input checks (empty message, unrelated message, consent before calling) | **Working.** Simple rules, no AI. |
-
-The future AI system will understand free text requests, read any carrier bill, use a voice agent to call the carrier, handle menus, bots and retention offers within the user's rules, and bring the user in only for the final approval. Acting on the user's behalf was a non-goal in Project Problem Framing; it is simulated here to test the long-term vision early, before building it.
-
-## Test results
-
-| Test | Input or action | What happened | Pass, partial, or fail |
-| --- | --- | --- | --- |
-| Typical case | Ran the full flow with each carrier (T-Mobile, Verizon, AT&T), both to cancel and to switch keeping the number, choosing different options at each step | Iris understood the request, showed the right bill summary and cost to leave, made the simulated call, called to ask for approval, and sent the confirmation card (with transfer PIN when switching). | Pass |
-| Challenge case | Verizon family plan: answered "Not sure" about the promo credit, edited a value with "Something's off", chose "Ask me if it's over $20/mo off", then got the $25/mo offer mid call | The flow handled every branch: the cost recalculated after the edit, Iris paused the call to ask about the offer, and the call continued based on the answer. However, the quick reply chips, summary cards and editable fields would not work like this inside iMessage or WhatsApp today, so the experience is not yet realistic for a messaging app. | Partial |
-| Invalid or empty case | Tried to send an empty message, typed something unrelated, then declined the approval call | Send was disabled with an empty message, Iris redirected the unrelated message back to the options for that step, and declining the call led to "I'll keep them on hold" with a button to be called again. No dead ends. | Pass |
-
-## Known limitations
-
-1. **The call is entirely simulated.** No voice agent exists yet and every update is prewritten. Next step: test a voice agent against a mock carrier line before any real call.
-2. **Iris doesn't really understand messages or bills.** Keyword matching misses anything phrased unexpectedly, and only the three sample bills give accurate numbers. Next step: connect an AI model to interpret messages and extract facts from real bills.
-3. **Built for a demo screen, not a real messaging app.** Quick reply chips, summary cards and editable fields don’t work like this in iMessage or SMS today (WhatsApp supports some buttons). Next step: redesign the flow around plain text with numbered replies, photos, and a link for anything complex.
+| Options after the result (leave now, better deal, wait) | **Working** logic on the sample numbers. The "remind you later" reminder is **simulated**. |
+| Making the call (bot, hold, agent, retention offers) and calling the user to approve | **Simulated.** Prewritten. No real call is placed. |
+| Cost to leave | **Working.** Arithmetic, recalculates when the user edits a value. |
+| Calling real carriers with a voice agent | **Planned.** |
 
 ## Privacy
 
-No API keys, passwords, or tokens are stored in this repository. Nothing the user types is saved or sent anywhere.
+No API keys, passwords or tokens are stored in this repository (the AI integration is configured in Replit's environment). Messages sent to the AI endpoint are not saved. Use only sample information when testing.

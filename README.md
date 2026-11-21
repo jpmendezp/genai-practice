@@ -12,7 +12,7 @@ Open the link and text Iris what you need (for example, *"I'm moving to Mint Mob
 
 ## Demo Video
 
-Draft demo (Google Drive): **[ADD GOOGLE DRIVE LINK]**
+Draft demo (Google Drive): https://drive.google.com/file/d/1jmLs29G7WM5CsCAEmWYs8yEw0GZ3sqkn/view?usp=sharing
 
 Viewing access granted to Emelia Hughes and Samuel Huang. The same file is uploaded to Canvas.
 
